@@ -27,6 +27,22 @@ GRAPH_BASE = f"https://graph.facebook.com/{GRAPH_API_VERSION}"
 IG_CAPTION_LIMIT = 2200
 
 
+def _extract_api_error(r: requests.Response) -> str:
+    """Graph APIのエラーレスポンスから要点（message / code / subcode）を抽出し、
+    notesに残しやすい短い文字列にして返す。"""
+    try:
+        err = r.json().get("error", {})
+        msg = err.get("message", "unknown error")
+        code = err.get("code")
+        subcode = err.get("error_subcode")
+    except (ValueError, AttributeError):
+        return r.text[:120]
+    if code is not None:
+        tag = f"code={code}" + (f" subcode={subcode}" if subcode is not None else "")
+        return f"{msg} [{tag}]"
+    return msg
+
+
 def _create_container(ig_user_id: str, token: str, image_url: str, caption: str) -> str:
     url = f"{GRAPH_BASE}/{ig_user_id}/media"
     payload = {
@@ -47,6 +63,10 @@ def _wait_for_finish(ig_user_id: str, token: str, container_id: str, max_wait_se
     Instagramは画像URLを非同期に取得・処理するため、混雑時やraw URL応答が
     遅いと60秒では足りないことがある。デフォルト180秒まで待つ。
     環境変数 IG_CONTAINER_TIMEOUT_SEC で上書き可能。
+
+    ポーリングが認証・権限・不正リクエスト系のエラー（HTTP 400/401/403）を
+    返した場合は、リトライしても回復しないため待機を打ち切って即座に中断し、
+    Graph APIのエラー内容（message / code / subcode）を添えて送出する。
     """
     override = os.environ.get("IG_CONTAINER_TIMEOUT_SEC", "").strip()
     if override.isdigit():
@@ -72,7 +92,18 @@ def _wait_for_finish(ig_user_id: str, token: str, container_id: str, max_wait_se
                     return
                 if last_status == "ERROR":
                     raise RuntimeError(f"IG container error: {r.text}")
+            elif r.status_code in (400, 401, 403):
+                # 認証・権限・不正リクエスト系。リトライしても回復しないため即中断。
+                detail = _extract_api_error(r)
+                logger.error(
+                    "[IG] status poll rejected (non-retryable) status=%s body=%s",
+                    r.status_code, r.text[:300],
+                )
+                raise RuntimeError(
+                    f"IG container read denied (HTTP {r.status_code}): {detail}"
+                )
             else:
+                # 429・5xx 等は一時的な可能性があるためリトライを継続
                 logger.warning("[IG] status poll failed status=%s body=%s",
                                r.status_code, r.text[:200])
         except requests.RequestException as e:
