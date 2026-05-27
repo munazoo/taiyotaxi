@@ -18,6 +18,22 @@ GRAPH_API_VERSION = "v20.0"
 GRAPH_BASE = f"https://graph.facebook.com/{GRAPH_API_VERSION}"
 
 
+def _extract_api_error(r: requests.Response) -> str:
+    """Graph APIのエラーレスポンスから要点（message / code / subcode）を抽出し、
+    notesに残しやすい短い文字列にして返す。"""
+    try:
+        err = r.json().get("error", {})
+        msg = err.get("message", "unknown error")
+        code = err.get("code")
+        subcode = err.get("error_subcode")
+    except (ValueError, AttributeError):
+        return r.text[:120]
+    if code is not None:
+        tag = f"code={code}" + (f" subcode={subcode}" if subcode is not None else "")
+        return f"{msg} [{tag}]"
+    return msg
+
+
 def post_to_facebook(message: str, image_url: str = "", dry_run: bool = False) -> Optional[str]:
     """投稿に成功したら post_id を返す。"""
     if not message:
@@ -54,8 +70,9 @@ def post_to_facebook(message: str, image_url: str = "", dry_run: bool = False) -
 
     r = requests.post(url, data=payload, timeout=30)
     if not r.ok:
+        detail = _extract_api_error(r)
         logger.error("[FB] post failed status=%s body=%s", r.status_code, r.text)
-        r.raise_for_status()
+        raise RuntimeError(f"FB post failed (HTTP {r.status_code}): {detail}")
     data = r.json()
     post_id = data.get("post_id") or data.get("id")
     logger.info("[FB] post success post_id=%s", post_id)

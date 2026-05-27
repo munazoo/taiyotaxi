@@ -52,8 +52,9 @@ def _create_container(ig_user_id: str, token: str, image_url: str, caption: str)
     }
     r = requests.post(url, data=payload, timeout=30)
     if not r.ok:
+        detail = _extract_api_error(r)
         logger.error("[IG] container create failed status=%s body=%s", r.status_code, r.text)
-        r.raise_for_status()
+        raise RuntimeError(f"IG container create failed (HTTP {r.status_code}): {detail}")
     return r.json()["id"]
 
 
@@ -120,8 +121,9 @@ def _publish(ig_user_id: str, token: str, container_id: str) -> str:
     payload = {"creation_id": container_id, "access_token": token}
     r = requests.post(url, data=payload, timeout=30)
     if not r.ok:
+        detail = _extract_api_error(r)
         logger.error("[IG] publish failed status=%s body=%s", r.status_code, r.text)
-        r.raise_for_status()
+        raise RuntimeError(f"IG publish failed (HTTP {r.status_code}): {detail}")
     return r.json()["id"]
 
 
